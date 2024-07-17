@@ -5,11 +5,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/eiannone/keyboard"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/eiannone/keyboard"
 )
 
 type Optional[T any] struct {
@@ -71,19 +73,37 @@ func ReadNumber(reader *bufio.Reader) (int, error) {
 	return number, nil
 }
 
-func GetActions(url string) ReceivedActions {
-	resp, err := http.Get(fmt.Sprintf("%sGetActions", url))
+func GetActions(client http.Client, url string) (*ReceivedActions, error) {
+	resp, err := client.Get(fmt.Sprintf("%sGetActions", url))
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	var availableActions ReceivedActions
 	err = json.NewDecoder(resp.Body).Decode(&availableActions)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	return availableActions
+	return &availableActions, nil
+}
+
+func SendAction(client http.Client, url string, action SimpleAction) error {
+	act := DoAction{}
+	act.Action.ID = action.id
+	data, err := json.Marshal(act)
+	if err != nil {
+		return err
+	}
+	resp, err := http.Post(fmt.Sprintf("%sDoAction", url), "application/json", bytes.NewBuffer(data))
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != 204 {
+		return fmt.Errorf("wrong statuscode")
+	}
+	defer resp.Body.Close()
+	return nil
 }
 
 func main() {
@@ -131,6 +151,7 @@ func main() {
 	}
 
 	url := fmt.Sprintf("http://%s:%d/", connectionArgs.ip.Value, connectionArgs.port.Value)
+	client := http.Client{Timeout: 5 * time.Second}
 
 	err := keyboard.Open()
 	if err != nil {
@@ -164,7 +185,10 @@ func main() {
 			}
 		} else if state == StateAdd {
 			fmt.Printf("Available Actions:\n")
-			actions := GetActions(url)
+			actions, err := GetActions(client, url)
+			if err != nil {
+				panic(err)
+			}
 			for i, a := range actions.Actions {
 				fmt.Printf("%d) %s\n", i, a.Name)
 			}
@@ -211,18 +235,7 @@ func main() {
 			if !ok {
 				continue
 			}
-			action := DoAction{}
-			action.Action.ID = ac.id
-			data, err := json.Marshal(action)
-			if err != nil {
-				panic(err)
-			}
-			resp, err := http.Post(fmt.Sprintf("%sDoAction", url), "application/json", bytes.NewBuffer(data))
-			if err != nil || resp.StatusCode != 204 {
-				fmt.Printf("Error while sending request\n")
-				continue
-			}
-			defer resp.Body.Close()
+			_ = SendAction(client, url, ac)
 		}
 	}
 	fmt.Println("Exiting")
